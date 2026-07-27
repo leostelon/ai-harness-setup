@@ -22,10 +22,16 @@ set -e
 # only the dot-config dirs are). /root/workspace/.local/bin is not on the
 # dispatcher's PATH, so also expose the entry symlink at /usr/local/bin, which
 # always is.
-command -v agent >/dev/null 2>&1 ||
+# Exposed as `cursor`, NOT `agent`. Every harness delta overlays into the SAME
+# /opt/harnesses tree, so a generic name collides with any other harness that
+# ships one — grok's installer drops an `agent` too, and the bake's disjointness
+# gate rejects the conflict (`./bin/agent <- cursor grok`). Each harness's
+# entrypoint is named after the harness. Keep this in step with
+# dockers/Dockerfile.harnesses in the terminal repo, which bakes bin/cursor.
+command -v cursor >/dev/null 2>&1 ||
   curl -fsS https://cursor.com/install | HOME=/root/workspace bash || true
 [ -x /root/workspace/.local/bin/agent ] &&
-  ln -sf /root/workspace/.local/bin/agent /usr/local/bin/agent || true
+  ln -sf /root/workspace/.local/bin/agent /usr/local/bin/cursor || true
 
 # --- seed the shared agent primer -------------------------------------------
 # Seed the shared agent primer from the repo root (single source of truth).

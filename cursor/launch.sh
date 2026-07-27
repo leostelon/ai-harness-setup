@@ -47,4 +47,4 @@ else
   curl -fsSL --max-time 10 "$SKILLS_RAW_BASE/${TRIBES_HARNESS_REF:-main}/install-skills.sh" | sh || true
 fi
 
-exec agent
+exec cursor
