@@ -150,6 +150,12 @@ data-provider egress goes through the transparent MITM path, not the
 per-request tollbooth — it does **not** mean egress is free (see "Billing
 model") and it does **not** mean it skips model metering.
 
+## Related skill
+
+- `zipbox-x.com` (`zipbox-x.com/SKILL.md`) — a worked example of this contract:
+  it sends the catalog placeholder in the `Authorization` header slot and is
+  billed per request, with the per-endpoint rates written out.
+
 ## Related hardening
 
 Tollbooth billing check-then-act (overspend) and the header-slot placeholder

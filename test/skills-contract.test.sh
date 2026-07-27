@@ -93,8 +93,12 @@ for dir in "$SKILLS"/*/; do
     fail "$slug: $lines lines (> 300)"
   fi
 
-  # 6. cross-references resolve to real slugs.
-  refs="$(grep -oE '[a-z0-9][a-z0-9-]*/SKILL\.md' "$f" 2>/dev/null | sed 's#/SKILL\.md##' | sort -u)"
+  # 6. cross-references resolve to real slugs. The charset ADMITS A DOT because a
+  # slug may carry one (zipbox-x.com). Without it no match can begin at the `z` of
+  # "zipbox-x.com/SKILL.md" — every backtrack hits the dot — so the extractor falls
+  # through to the `c` and reports an unresolvable ref named "com", blaming the file
+  # that HOLDS the reference rather than the skill it points at.
+  refs="$(grep -oE '[a-z0-9][a-z0-9.-]*/SKILL\.md' "$f" 2>/dev/null | sed 's#/SKILL\.md##' | sort -u)"
   for ref in $refs; do
     if [ -d "$SKILLS/$ref" ]; then
       pass "$slug: cross-reference '$ref' resolves"

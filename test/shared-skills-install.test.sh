@@ -13,7 +13,8 @@ zipbox-dns
 zipbox-egress
 zipbox-email
 zipbox-wallet
-zipbox-websearch"
+zipbox-websearch
+zipbox-x.com"
 
 fail() {
   printf 'FAIL - %s\n' "$1" >&2
@@ -137,7 +138,7 @@ done
 assert_eq "$(grep -c '<!-- BEGIN TRIBES SKILLS -->' /root/workspace/AGENTS.md)" "1" \
   "AGENTS skills block count"
 for slug in $EXPECTED; do
-  assert_eq "$(grep -c -- "- \*\*$slug\*\*" /root/workspace/AGENTS.md)" "1" \
+  assert_eq "$(grep -cF -- "- **$slug**" /root/workspace/AGENTS.md)" "1" \
     "$slug AGENTS route count"
   grep -F "Read: /root/skills/$slug/SKILL.md" /root/workspace/AGENTS.md >/dev/null \
     || fail "$slug AGENTS route does not use the canonical path"

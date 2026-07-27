@@ -26,7 +26,8 @@ zipbox-dns
 zipbox-egress
 zipbox-email
 zipbox-wallet
-zipbox-websearch"
+zipbox-websearch
+zipbox-x.com"
 
 fail() {
   printf 'FAIL - %s\n' "$1" >&2
