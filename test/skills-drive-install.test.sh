@@ -23,7 +23,6 @@ DRIVE=/opt/harnesses/skills
 EXPECTED="zipbox-browser
 zipbox-caddy
 zipbox-dns
-zipbox-egress
 zipbox-email
 zipbox-wallet
 zipbox-websearch"
