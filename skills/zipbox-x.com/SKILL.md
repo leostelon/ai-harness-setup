@@ -129,7 +129,9 @@ x_get 2/users/by/username/Hyperliquid_X \
   --data-urlencode 'user.fields=created_at,description,public_metrics,verified'
 ```
 
-Recent search — the workhorse. Covers the last 7 days:
+Recent search — the workhorse. Covers the last 7 days. `max_results` here accepts
+**10–100 only**: X rejects anything below 10 with a `400`, and the one-unit floor
+still bills. Ten is the cheapest page you can buy.
 
 ```bash
 x_get 2/tweets/search/recent \
