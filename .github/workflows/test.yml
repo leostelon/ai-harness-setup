@@ -23,6 +23,8 @@ jobs:
         run: sh test/bootstrap-catalog-egress.test.sh
       - name: Primer render (host/identity self-heal)
         run: sh test/primer-render.test.sh
+      - name: No launcher claims it skips HTTP_PROXY while exporting it
+        run: sh test/proxy-env-contract.test.sh
       - name: skills authoring contract (mirrors the downstream consumer)
         run: sh test/skills-contract.test.sh
       - name: shared skills installation contract

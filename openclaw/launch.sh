@@ -72,9 +72,16 @@ fi
 # openrouter.ai instead of using the metered proxy. Dropping it before exec leaves
 # the metered proxy as the only route the harness can see.
 #
-# We do NOT set HTTP_PROXY/HTTPS_PROXY: the forwarder catalog is a CONNECT
-# allowlist that 403s every non-catalog authority, so a blanket proxy would break
-# github/npm/apt/pypi on every box.
+# We DO set HTTP_PROXY/HTTPS_PROXY, just before the exec below. This once said the
+# opposite, and it was true when written: the forwarder's CONNECT handling was an
+# exact catalog allowlist that 403'd every non-catalog authority, so a blanket proxy
+# really would have broken github/npm/apt/pypi. terminal#2883 replaced that with
+# default-allow passthrough over a resolved-address deny floor (#2887 added plain-HTTP
+# absolute-URI, #2891 brought bracketed IPv6 literals to the same floor), so a
+# non-catalog host now tunnels straight through unmetered. Catalog hosts stay metered
+# on :443. The claim outlived the behaviour it described and sat directly above the
+# code contradicting it (terminal#2875); test/proxy-env-contract.test.sh now fails CI
+# if it comes back.
 #
 # The unset is deliberately guard-scoped, NOT value-scoped (i.e. not "unset only
 # if it looks like the placeholder"). Value-matching would couple this script to a
