@@ -23,17 +23,36 @@ REF="${TRIBES_HARNESS_REF:-${HOST_HARNESS_REF:-main}}"
 # hostname is the boot slug (a claim never renames the VM), and a box bootstrapped
 # before its identity row is bound has no TRIBES_IDENTITY_* and froze "none".
 # launch.sh re-runs the renderer every launch so both self-heal.
+# DRIVE-FIRST, same gate the skills install below uses. The shared read-only
+# /opt/harnesses drive bakes the WHOLE template tree at the pinned ref
+# (dockers/Dockerfile.harnesses in tribes-protocol/terminal), so a stock boot
+# copies the primer + renderer off the drive and touches no network. The curl
+# runs only when the drive predates templates (old image, dev backend) or when a
+# pinned TRIBES_HARNESS_REF (QA) must exercise that ref's own primer.
+#
+# Behaviour change, intended: a stock box now gets the PINNED primer instead of
+# whatever is on `main`. TRIBES_HARNESS_REF is unset in this env on stock boxes,
+# so the curl below was resolving REF to `main` while the template itself was
+# pinned — the primer floated. A hotfix pushed to `main` now needs a pin bump +
+# drive rebake to reach stock boxes.
 mkdir -p /opt/tribes 2>/dev/null || true
-curl -fsSL "$RAW_BASE/$REF/AGENTS.md" -o /opt/tribes/AGENTS.md.tmpl 2>/dev/null || true
-# Fetch LOUDLY: a 404 here (e.g. the ref lacks this file) previously fell
-# through silently and left the primer un-rendered on every box, which is
-# exactly how this shipped inert. Report the ref so the cause is obvious.
-if curl -fsSL "$RAW_BASE/$REF/render-primer.sh" -o /opt/tribes/render-primer.sh 2>/dev/null; then
+if [ -z "${TRIBES_HARNESS_REF:-}" ] && [ -f /opt/harnesses/templates/render-primer.sh ]; then
+  cp /opt/harnesses/templates/AGENTS.md /opt/tribes/AGENTS.md.tmpl 2>/dev/null || true
+  cp /opt/harnesses/templates/render-primer.sh /opt/tribes/render-primer.sh 2>/dev/null || true
+else
+  curl -fsSL "$RAW_BASE/$REF/AGENTS.md" -o /opt/tribes/AGENTS.md.tmpl 2>/dev/null || true
+  curl -fsSL "$RAW_BASE/$REF/render-primer.sh" -o /opt/tribes/render-primer.sh 2>/dev/null || true
+fi
+# Report LOUDLY when the renderer is missing: a 404 (or an absent drive copy)
+# previously fell through silently and left the primer un-rendered on every box,
+# which is exactly how this shipped inert once. Name the ref so the cause is
+# obvious.
+if [ -f /opt/tribes/render-primer.sh ]; then
   chmod +x /opt/tribes/render-primer.sh 2>/dev/null || true
   sh /opt/tribes/render-primer.sh ||
     echo "[primer] render-primer.sh FAILED on first boot" >&2
 else
-  echo "[primer] could not fetch render-primer.sh from ref '$REF' — primer NOT rendered" >&2
+  echo "[primer] no render-primer.sh on the drive or at ref '$REF' — primer NOT rendered" >&2
 fi
 
 # --- platform-funded config ----------------------------------------------------

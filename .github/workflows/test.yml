@@ -31,3 +31,5 @@ jobs:
         run: sudo -E sh test/shared-skills-install.test.sh
       - name: drive-first skills installation contract
         run: sudo -E sh test/skills-drive-install.test.sh
+      - name: drive-first primer contract
+        run: sudo -E sh test/templates-drive-primer.test.sh
