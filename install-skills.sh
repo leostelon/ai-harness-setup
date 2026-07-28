@@ -38,7 +38,7 @@
 AGENTS="/root/workspace/AGENTS.md"
 SKILLS_DIR="/root/skills"
 LEGACY_SKILLS_DIR="$HOME/.agent-skills"
-EXPECTED_SKILLS="zipbox-browser zipbox-caddy zipbox-dns zipbox-egress zipbox-email zipbox-wallet zipbox-websearch"
+EXPECTED_SKILLS="zipbox-browser zipbox-caddy zipbox-dns zipbox-email zipbox-wallet zipbox-websearch"
 
 # The drive layout is a cross-repo CONTRACT with the terminal repo:
 # dockers/Dockerfile.harnesses bakes skills/<slug>/ + install-skills.sh +
