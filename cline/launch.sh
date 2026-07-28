@@ -10,6 +10,35 @@
 # bound yet. AGENTS.md is auto-loaded into the agent's context, so a frozen primer
 # feeds it a WRONG public URL by default. Re-render from the untouched template
 # with this launch's live env so both self-heal and survive restore.
+
+# --- terminal colour scheme for THIS launch ---------------------------------
+# Re-derived on EVERY launch so a mid-session light/dark toggle takes effect the
+# next time the harness starts. Prefer the LIVE theme the in-VM bridge writes to
+# /run/tribes-theme on every browser theme frame; fall back to the create-time
+# TRIBES_THEME for a box no browser has touched yet.
+#
+# COLORFGBG is the de-facto standard variable a terminal application reads to
+# decide whether its background is light or dark WITHOUT an OSC round trip
+# ('<fg>;<bg>'; the BACKGROUND field is what callers test -- 0-6 and 8 are dark,
+# 7 and 9-15 light). Unset is NOT neutral: a tool that consults it finds nothing
+# and falls back to its OWN default, almost always dark, so a light-theme user
+# got dark-themed tools inside a correctly-recoloured terminal. Exported here
+# rather than probed, because an OSC-11 probe before exec wedged grok's pager.
+#
+# TRIBES_THEME is re-exported from the same live value so anything reading it
+# later in this launch sees the current theme, not the create-time snapshot.
+theme="$(cat /run/tribes-theme 2>/dev/null)"
+[ "$theme" = light ] || [ "$theme" = dark ] || theme=$([ "$TRIBES_THEME" = light ] && echo light || echo dark)
+export TRIBES_THEME="$theme"
+# Multi-line on purpose: a single-line `if ...; fi` increments the nesting depth
+# of line-scanning checks (test/cline-notice-suppression.test.sh counts `if` at
+# line start against a bare `fi`) and would make every later line look guarded.
+if [ "$theme" = light ]; then
+  export COLORFGBG='0;15'
+else
+  export COLORFGBG='15;0'
+fi
+
 if [ -e /opt/tribes/render-primer.sh ]; then
   sh /opt/tribes/render-primer.sh ||
     echo "[primer] render-primer.sh FAILED — primer may be stale" >&2
@@ -48,7 +77,19 @@ if [ -z "${TRIBES_HARNESS_REF:-}" ] && [ -f /opt/harnesses/skills/install-skills
   sh /opt/harnesses/skills/install-skills.sh || true
 else
   SKILLS_RAW_BASE="$(echo "${TRIBES_HARNESS_REPO:-https://github.com/tribes-protocol/ai-harness-setup}" | sed 's#//github\.com#//raw.githubusercontent.com#')"
-  curl -fsSL --max-time 10 "$SKILLS_RAW_BASE/${TRIBES_HARNESS_REF:-main}/install-skills.sh" | sh || true
+  # NEVER `| sh`, and NEVER a mutable ref (#2948 / #2937). Same contract as
+  # bootstrap.sh: resolve guest pin -> host pin -> the last reviewed release (never
+  # `main`, which routes around the release pin), download to a file, require the
+  # complete file, then run it. A truncated transfer can no longer half-execute.
+  SKILLS_REF="${TRIBES_HARNESS_REF:-${HOST_HARNESS_REF:-68adbaccc020d97b8b62a6f400c8283b22ecae07}}"
+  sk="$(mktemp 2>/dev/null || echo /tmp/install-skills.$$)"
+  if curl -fsSL --max-time 10 "$SKILLS_RAW_BASE/$SKILLS_REF/install-skills.sh" -o "$sk" 2>/dev/null &&
+     [ -s "$sk" ] && [ "$(tail -n 1 "$sk")" = "exit 0" ]; then
+    sh "$sk" || true
+  else
+    echo "[skills] installer fetch failed or INCOMPLETE at ref '$SKILLS_REF' — skills NOT installed" >&2
+  fi
+  rm -f "$sk"
 fi
 
 # --- close the direct-provider escape hatch (#2255) --------------------------
@@ -60,9 +101,16 @@ fi
 # openrouter.ai instead of using the metered proxy. Dropping it before exec leaves
 # the metered proxy as the only route the harness can see.
 #
-# We do NOT set HTTP_PROXY/HTTPS_PROXY: the forwarder catalog is a CONNECT
-# allowlist that 403s every non-catalog authority, so a blanket proxy would break
-# github/npm/apt/pypi on every box.
+# We DO set HTTP_PROXY/HTTPS_PROXY, just before the exec below. This once said the
+# opposite, and it was true when written: the forwarder's CONNECT handling was an
+# exact catalog allowlist that 403'd every non-catalog authority, so a blanket proxy
+# really would have broken github/npm/apt/pypi. terminal#2883 replaced that with
+# default-allow passthrough over a resolved-address deny floor (#2887 added plain-HTTP
+# absolute-URI, #2891 brought bracketed IPv6 literals to the same floor), so a
+# non-catalog host now tunnels straight through unmetered. Catalog hosts stay metered
+# on :443. The claim outlived the behaviour it described and sat directly above the
+# code contradicting it (terminal#2875); test/proxy-env-contract.test.sh now fails CI
+# if it comes back.
 #
 # The unset is deliberately guard-scoped, NOT value-scoped (i.e. not "unset only
 # if it looks like the placeholder"). Value-matching would couple this script to a
@@ -99,5 +147,36 @@ if [ -n "${ZIPBOX_EGRESS_PROXY_URL:-}" ]; then
   export HTTPS_PROXY="$ZIPBOX_EGRESS_PROXY_URL"
   export HTTP_PROXY="$ZIPBOX_EGRESS_PROXY_URL"
 fi
+
+# --- suppress the ClinePass upsell, which EATS THE USER'S FIRST ENTER (#2924) ---
+# cline 3.0.46 paints a "Try ClinePass" subscription modal over the composer on
+# startup ("Press Enter to open, Esc to close"). It is modal over the KEYBOARD, not
+# just the screen: the user types their first prompt, presses Enter, and the Enter
+# is consumed by the modal — cline prints "Opened ClinePass in your browser" and the
+# prompt is never submitted. No turn, no error, no billed generation. The composer
+# still shows the text, so the box looks alive and simply never answers.
+#
+# Measured on proof-run-02 (gohan) through a REAL agent-shell launch, harness ref
+# 559ef061, three runs differing in one variable each:
+#   no env var, no Esc  -> modal shown, Enter eaten, NO billing transaction
+#   no env var, Esc first -> modal dismissed, turn ran, -617 uUSD
+#   THIS env var, no Esc  -> modal absent (0 occurrences), turn ran, -617 uUSD
+#
+# CLINE_DISABLE_CLINE_PASS_NOTICE is cline's own supported switch (it ships beside
+# CLINE_FORCE_CLINE_PASS_NOTICE in the CLI binary), so this is the vendor's opt-out,
+# not a hack.
+#
+# Set in launch.sh, not bootstrap.sh, and as ENV rather than by pre-seeding cline's
+# ~/.cline/data/settings/cli-notices.json "shown" map: the file is written by cline
+# itself, is not part of any contract with us, and lives on the PERSISTENT disk, so
+# seeding it would be a one-shot that a fresh disk, a restore, or a new notice key
+# (the binary already carries a second one, `cline-cli-zen`) would walk straight
+# past. The env var is re-applied on EVERY launch, exactly like the token refresh
+# above, so it survives restore and cannot go stale.
+#
+# Unconditional, deliberately: the upsell is wrong for a BYO box too. A user who
+# brought their own key did not ask us for a subscription pitch either, and there
+# is nothing platform-funded about the keystroke it steals.
+export CLINE_DISABLE_CLINE_PASS_NOTICE=1
 
 exec cline -i --auto-approve true

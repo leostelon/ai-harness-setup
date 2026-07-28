@@ -14,24 +14,43 @@ command -v codex >/dev/null 2>&1 ||
 # --- seed the shared agent primer -------------------------------------------
 # Seed the shared agent primer from the repo root (single source of truth).
 RAW_BASE="$(echo "${TRIBES_HARNESS_REPO:-https://github.com/tribes-protocol/ai-harness-setup}" | sed 's#//github\.com#//raw.githubusercontent.com#')"
-REF="${TRIBES_HARNESS_REF:-${HOST_HARNESS_REF:-main}}"
+REF="${TRIBES_HARNESS_REF:-${HOST_HARNESS_REF:-68adbaccc020d97b8b62a6f400c8283b22ecae07}}"
 # Cache the PLACEHOLDER-BEARING primer + the renderer outside the workspace, then
 # render. Bootstrap runs ONCE and its sed consumes the placeholders, so stamping
 # them here alone froze the wrong values for the life of the disk: the guest's
 # hostname is the boot slug (a claim never renames the VM), and a box bootstrapped
 # before its identity row is bound has no TRIBES_IDENTITY_* and froze "none".
 # launch.sh re-runs the renderer every launch so both self-heal.
+# DRIVE-FIRST, same gate the skills install below uses. The shared read-only
+# /opt/harnesses drive bakes the WHOLE template tree at the pinned ref
+# (dockers/Dockerfile.harnesses in tribes-protocol/terminal), so a stock boot
+# copies the primer + renderer off the drive and touches no network. The curl
+# runs only when the drive predates templates (old image, dev backend) or when a
+# pinned TRIBES_HARNESS_REF (QA) must exercise that ref's own primer.
+#
+# Behaviour change, intended: a stock box now gets the PINNED primer instead of
+# whatever is on `main`. TRIBES_HARNESS_REF is unset in this env on stock boxes,
+# so the curl below was resolving REF to `main` while the template itself was
+# pinned — the primer floated. A hotfix pushed to `main` now needs a pin bump +
+# drive rebake to reach stock boxes.
 mkdir -p /opt/tribes 2>/dev/null || true
-curl -fsSL "$RAW_BASE/$REF/AGENTS.md" -o /opt/tribes/AGENTS.md.tmpl 2>/dev/null || true
-# Fetch LOUDLY: a 404 here (e.g. the ref lacks this file) previously fell
-# through silently and left the primer un-rendered on every box, which is
-# exactly how this shipped inert. Report the ref so the cause is obvious.
-if curl -fsSL "$RAW_BASE/$REF/render-primer.sh" -o /opt/tribes/render-primer.sh 2>/dev/null; then
+if [ -z "${TRIBES_HARNESS_REF:-}" ] && [ -f /opt/harnesses/templates/render-primer.sh ]; then
+  cp /opt/harnesses/templates/AGENTS.md /opt/tribes/AGENTS.md.tmpl 2>/dev/null || true
+  cp /opt/harnesses/templates/render-primer.sh /opt/tribes/render-primer.sh 2>/dev/null || true
+else
+  curl -fsSL "$RAW_BASE/$REF/AGENTS.md" -o /opt/tribes/AGENTS.md.tmpl 2>/dev/null || true
+  curl -fsSL "$RAW_BASE/$REF/render-primer.sh" -o /opt/tribes/render-primer.sh 2>/dev/null || true
+fi
+# Report LOUDLY when the renderer is missing: a 404 (or an absent drive copy)
+# previously fell through silently and left the primer un-rendered on every box,
+# which is exactly how this shipped inert once. Name the ref so the cause is
+# obvious.
+if [ -f /opt/tribes/render-primer.sh ]; then
   chmod +x /opt/tribes/render-primer.sh 2>/dev/null || true
   sh /opt/tribes/render-primer.sh ||
     echo "[primer] render-primer.sh FAILED on first boot" >&2
 else
-  echo "[primer] could not fetch render-primer.sh from ref '$REF' — primer NOT rendered" >&2
+  echo "[primer] no render-primer.sh on the drive or at ref '$REF' — primer NOT rendered" >&2
 fi
 
 # --- config -----------------------------------------------------------------
@@ -45,7 +64,7 @@ fi
 # BYO (proxy env unset) → strip ONLY the proxy bits so codex falls back to its
 #      own provider/creds while staying auto-approved + trusted. No raw
 #      __TRIBES_* placeholders survive either way.
-# Done with `bun` (smol-toml) for a robust structured edit, not fragile sed.
+# Both edits are local: no install, no network, nothing to fetch at switch time.
 # Gate on a provider placeholder (provider placeholder from the in-VM P-256 key, via
 # the platform-provided OpenRouter placeholder) so a keyless BYO/external box strips the proxy bits below;
 # the token itself is env-only for codex (OPENAI_API_KEY, exported in launch.sh).
@@ -54,32 +73,24 @@ if [ -n "$TRIBES_LLM_MODEL" ] && [ -n "$token" ]; then
   sed -i "s|__TRIBES_PROXY__|https://openrouter.ai/api/v1|g" "$HOME/.codex/config.toml"
   sed -i "s|__TRIBES_MODEL__|$TRIBES_LLM_MODEL|g" "$HOME/.codex/config.toml"
 elif [ -e "$HOME/.codex/config.toml" ]; then
-  # Preferred: structured edit via bun + smol-toml (robust to whitespace/order).
-  ( cd /root/workspace && bun add --silent smol-toml >/dev/null 2>&1 || true )
-  TOML_PATH="$HOME/.codex/config.toml" bun -e '
-    import { parse, stringify } from "smol-toml";
-    const p = process.env.TOML_PATH;
-    const cfg = parse(await Bun.file(p).text());
-    delete cfg.model;
-    delete cfg.model_provider;
-    delete cfg.model_providers;
-    await Bun.write(p, stringify(cfg) + "\n");
-  ' 2>/dev/null || true
-  # Fallback: if a raw __TRIBES_ placeholder survived (e.g. bun/smol-toml
-  # unavailable offline), strip the proxy bits with awk so the safety net below
-  # does not nuke the whole file and lose the trust/yolo settings. Drops the
-  # top-level model/model_provider keys and the [model_providers.*] table.
-  if grep -q "__TRIBES_" "$HOME/.codex/config.toml" 2>/dev/null; then
-    awk '
-      /^[[:space:]]*\[model_providers/ { skip=1; next }
-      /^[[:space:]]*\[/               { skip=0 }
-      skip                            { next }
-      /^[[:space:]]*model[[:space:]]*=/          { next }
-      /^[[:space:]]*model_provider[[:space:]]*=/ { next }
-      { print }
-    ' "$HOME/.codex/config.toml" > "$HOME/.codex/config.toml.tmp" &&
-      mv "$HOME/.codex/config.toml.tmp" "$HOME/.codex/config.toml"
-  fi
+  # Strip the proxy bits with awk: drop the top-level model/model_provider keys
+  # and the whole [model_providers.*] table, keeping trust/yolo untouched.
+  #
+  # This used to prefer a structured `bun -e` edit via smol-toml, which meant
+  # `bun add smol-toml` — a NETWORK INSTALL at switch time, on the one path this
+  # harness is supposed to have nothing left to install. The seed config.toml is
+  # OURS and committed, so its whitespace and key order are not adversarial
+  # input: awk over a file we wrote is sufficient, and it is offline. The awk was
+  # already here as the fallback and already shipping; it is now the only path.
+  awk '
+    /^[[:space:]]*\[model_providers/ { skip=1; next }
+    /^[[:space:]]*\[/               { skip=0 }
+    skip                            { next }
+    /^[[:space:]]*model[[:space:]]*=/          { next }
+    /^[[:space:]]*model_provider[[:space:]]*=/ { next }
+    { print }
+  ' "$HOME/.codex/config.toml" > "$HOME/.codex/config.toml.tmp" &&
+    mv "$HOME/.codex/config.toml.tmp" "$HOME/.codex/config.toml"
 fi
 
 # --- safety net -------------------------------------------------------------
@@ -105,5 +116,18 @@ done
 if [ -z "${TRIBES_HARNESS_REF:-}" ] && [ -f /opt/harnesses/skills/install-skills.sh ]; then
   sh /opt/harnesses/skills/install-skills.sh || true
 else
-  curl -fsSL --max-time 20 "$RAW_BASE/${TRIBES_HARNESS_REF:-main}/install-skills.sh" | sh || true
+  # NEVER `| sh`, and NEVER a mutable ref (#2948 / #2937). `curl | sh` executes a
+  # TRUNCATED transfer as root — the shell runs whatever bytes arrived. Download to
+  # a file at the ref $REF already resolved above (guest pin -> host pin -> the last
+  # reviewed release), require the complete file (install-skills.sh ends with a
+  # literal `exit 0`; test/runtime-supply-chain-pins.test.sh locks that contract),
+  # and only then run it.
+  sk="$(mktemp 2>/dev/null || echo /tmp/install-skills.$$)"
+  if curl -fsSL --max-time 20 "$RAW_BASE/$REF/install-skills.sh" -o "$sk" 2>/dev/null &&
+     [ -s "$sk" ] && [ "$(tail -n 1 "$sk")" = "exit 0" ]; then
+    sh "$sk" || true
+  else
+    echo "[skills] installer fetch failed or INCOMPLETE at ref '$REF' — skills NOT installed" >&2
+  fi
+  rm -f "$sk"
 fi

@@ -77,8 +77,8 @@ x_get() {
 
 `ZIPBOX_EGRESS_PROXY_URL` is set only on explicit-proxy boxes; on transparent
 (MITM) boxes it is unset and the wrapper correctly skips the export. Either way
-the call is intercepted, keyed, and metered — see `zipbox-egress/SKILL.md` for
-which mode this box is in.
+the call is intercepted, keyed, and metered; `printenv ZIPBOX_EGRESS_PROXY_URL`
+tells you which mode this box is in.
 
 Pass query parameters with `--data-urlencode`, which the `--get` flag turns into a
 query string. **Always write it as `name=value`.** A bare value with no `name=` is
@@ -183,9 +183,7 @@ the whole follower graph, report that it is out of budget instead.
 | HTTP 429 from X | Rate limited. Read `x-rate-limit-reset`, wait, retry once. Never evade the limit. |
 | Empty `data` with a `meta` block | The query genuinely matched nothing. The one-unit floor was still charged. Rewrite the query once, then stop. |
 
-## Related skills
+## Related skill
 
-- `zipbox-egress` (`zipbox-egress/SKILL.md`) — which egress mode this box is in and
-  how placeholder injection and metering work.
 - `zipbox-websearch` (`zipbox-websearch/SKILL.md`) — cheaper for general facts and
   for anything not specifically about X activity.

@@ -149,16 +149,31 @@ fi
 # defeated by this one name. These assert the guest variable WINS.
 fails_before=$fails
 
+# Asserted POSITIVELY, per file. The previous shape was an if/elif whose "correct"
+# branch was a no-op `:`, so once the expression changed at all — as #2937 changed
+# it — NEITHER branch matched and the loop passed while checking nothing. A test
+# that goes vacuous under the very edit it guards is worse than no test.
+#
+# The resolver must be exactly: guest pin -> host pin -> an immutable 40-hex
+# release SHA. `main` is the defect (#2937): a mutable branch here routes around
+# the release pin, and `|| true` downstream makes the swap silent.
+resolvers=0
 for f in "$REPO"/*/bootstrap.sh "$REPO/render-primer.sh"; do
   name="${f#$REPO/}"
-  # Must consult the guest var. A bare HOST_HARNESS_REF reader is the bug.
-  if grep -q 'TRIBES_HARNESS_REF:-\${HOST_HARNESS_REF:-main}' "$f" 2>/dev/null; then
-    :
-  elif grep -q 'HOST_HARNESS_REF:-main' "$f" 2>/dev/null; then
-    fail "$name resolves its ref from HOST_HARNESS_REF (host-only var — never set in the guest)"
+  resolvers=$((resolvers + 1))
+
+  if ! grep -qE 'REF="\$\{TRIBES_HARNESS_REF:-\$\{HOST_HARNESS_REF:-[0-9a-f]{40}\}\}"' "$f"; then
+    fail "$name has no TRIBES_HARNESS_REF -> HOST_HARNESS_REF -> <40-hex pin> resolver"
+  fi
+  if grep -q 'HOST_HARNESS_REF:-main' "$f" 2>/dev/null; then
+    fail "$name still defaults its ref to the mutable branch 'main' (#2937)"
   fi
 done
-[ "$fails" -eq "$fails_before" ] && pass "every in-guest ref resolver prefers TRIBES_HARNESS_REF over the host-only name"
+# Positive control on the SCAN: if the glob matched nothing, every assertion above
+# was vacuous. 9 harnesses + render-primer.sh.
+[ "$resolvers" -eq 10 ] ||
+  fail "expected 10 ref resolvers (9 bootstrap.sh + render-primer.sh), scanned $resolvers — the scan is broken, not the files"
+[ "$fails" -eq "$fails_before" ] && pass "every in-guest ref resolver is guest-pin -> host-pin -> immutable release SHA ($resolvers scanned)"
 
 # The renderer must never be invoked with its errors discarded: `2>/dev/null || true`
 # on a MISSING dependency converts "was never installed" into silence, which is why

@@ -40,7 +40,7 @@ done
 if grep -Rqs '/llm/proxy' \
   "$REPO/claude" "$REPO/pi" "$REPO/codex" "$REPO/grok" \
   "$REPO/hermes" "$REPO/openclaw" "$REPO/opencode" "$REPO/cline" \
-  "$REPO/CONTRACT.md" "$REPO/skills/zipbox-egress/SKILL.md"; then
+  "$REPO/CONTRACT.md"; then
   fail "legacy LLM route remains"
 else
   pass "legacy LLM route is absent"

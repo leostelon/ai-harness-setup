@@ -15,15 +15,27 @@ jobs:
           bun-version: 1.3.14
       - name: launch.sh refreshes the proxy token on restore (GNU sed)
         run: sh test/launch-token-refresh.test.sh
+      - name: Theming launchers read the LIVE theme, not only the create-time one
+        run: sh test/launch-live-theme.test.sh
       - name: Pi live catalog uses the selected egress mode
         run: sh test/pi-catalog-egress.test.sh
       - name: Bootstrap catalogs use the selected egress mode
         run: sh test/bootstrap-catalog-egress.test.sh
       - name: Primer render (host/identity self-heal)
         run: sh test/primer-render.test.sh
+      - name: No launcher claims it skips HTTP_PROXY while exporting it
+        run: sh test/proxy-env-contract.test.sh
+      - name: claude model-id consistency
+        run: sh test/claude-model-id-consistency.test.sh
+      - name: cline suppresses the ClinePass upsell that eats the first Enter
+        run: sh test/cline-notice-suppression.test.sh
       - name: skills authoring contract (mirrors the downstream consumer)
         run: sh test/skills-contract.test.sh
+      - name: runtime supply-chain pins (no curl|shell, no mutable ref, digests gate execution)
+        run: sh test/runtime-supply-chain-pins.test.sh
       - name: shared skills installation contract
         run: sudo -E sh test/shared-skills-install.test.sh
       - name: drive-first skills installation contract
         run: sudo -E sh test/skills-drive-install.test.sh
+      - name: drive-first primer contract
+        run: sudo -E sh test/templates-drive-primer.test.sh

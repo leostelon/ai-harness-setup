@@ -38,7 +38,7 @@
 AGENTS="/root/workspace/AGENTS.md"
 SKILLS_DIR="/root/skills"
 LEGACY_SKILLS_DIR="$HOME/.agent-skills"
-EXPECTED_SKILLS="zipbox-browser zipbox-caddy zipbox-dns zipbox-egress zipbox-email zipbox-wallet zipbox-websearch zipbox-x.com"
+EXPECTED_SKILLS="zipbox-browser zipbox-caddy zipbox-dns zipbox-email zipbox-wallet zipbox-websearch zipbox-x.com"
 
 # The drive layout is a cross-repo CONTRACT with the terminal repo:
 # dockers/Dockerfile.harnesses bakes skills/<slug>/ + install-skills.sh +
@@ -76,7 +76,7 @@ trap 'rm -rf "$TMP" 2>/dev/null || true' EXIT
 STAGED=""
 if [ -z "$DRIVE" ] || [ -n "$PINNED" ]; then
   REPO="${TRIBES_HARNESS_REPO:-$DEFAULT_REPO}"
-  TGZ_URL="$(echo "$REPO" | sed 's#//github\.com#//codeload.github.com#')/tar.gz/${TRIBES_HARNESS_REF:-main}"
+  TGZ_URL="$(echo "$REPO" | sed 's#//github\.com#//codeload.github.com#')/tar.gz/${TRIBES_HARNESS_REF:-${HOST_HARNESS_REF:-68adbaccc020d97b8b62a6f400c8283b22ecae07}}"
 
   curl -fsSL --max-time 20 "$TGZ_URL" -o "$TMP/repo.tgz" 2>/dev/null || true
   tar -xzf "$TMP/repo.tgz" -C "$TMP" 2>/dev/null || true

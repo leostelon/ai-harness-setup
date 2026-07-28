@@ -2,7 +2,7 @@
 # Hermes harness launch — runs on EVERY launch, as root, cwd /root/workspace, sh.
 # Hermes is fully FILE-based (config.yaml), so there is NO env-based config to
 # export here. We re-sed the display.skin line from the CURRENT theme so a
-# TRIBES_THEME toggle takes effect on relaunch. The ^  skin: anchor matches both
+# live theme so a browser light/dark toggle takes effect on relaunch. The ^  skin: anchor matches both
 # the initial __TRIBES_SKIN__ placeholder and a previously-set value, so relaunch
 # toggles work. Then exec hermes with --yolo (bypasses dangerous-command
 # approvals; the microVM is the security boundary).
@@ -18,6 +18,35 @@
 # bound yet. AGENTS.md is auto-loaded into the agent's context, so a frozen primer
 # feeds it a WRONG public URL by default. Re-render from the untouched template
 # with this launch's live env so both self-heal and survive restore.
+
+# --- terminal colour scheme for THIS launch ---------------------------------
+# Re-derived on EVERY launch so a mid-session light/dark toggle takes effect the
+# next time the harness starts. Prefer the LIVE theme the in-VM bridge writes to
+# /run/tribes-theme on every browser theme frame; fall back to the create-time
+# TRIBES_THEME for a box no browser has touched yet.
+#
+# COLORFGBG is the de-facto standard variable a terminal application reads to
+# decide whether its background is light or dark WITHOUT an OSC round trip
+# ('<fg>;<bg>'; the BACKGROUND field is what callers test -- 0-6 and 8 are dark,
+# 7 and 9-15 light). Unset is NOT neutral: a tool that consults it finds nothing
+# and falls back to its OWN default, almost always dark, so a light-theme user
+# got dark-themed tools inside a correctly-recoloured terminal. Exported here
+# rather than probed, because an OSC-11 probe before exec wedged grok's pager.
+#
+# TRIBES_THEME is re-exported from the same live value so anything reading it
+# later in this launch sees the current theme, not the create-time snapshot.
+theme="$(cat /run/tribes-theme 2>/dev/null)"
+[ "$theme" = light ] || [ "$theme" = dark ] || theme=$([ "$TRIBES_THEME" = light ] && echo light || echo dark)
+export TRIBES_THEME="$theme"
+# Multi-line on purpose: a single-line `if ...; fi` increments the nesting depth
+# of line-scanning checks (test/cline-notice-suppression.test.sh counts `if` at
+# line start against a bare `fi`) and would make every later line look guarded.
+if [ "$theme" = light ]; then
+  export COLORFGBG='0;15'
+else
+  export COLORFGBG='15;0'
+fi
+
 if [ -e /opt/tribes/render-primer.sh ]; then
   sh /opt/tribes/render-primer.sh ||
     echo "[primer] render-primer.sh FAILED — primer may be stale" >&2
@@ -29,8 +58,19 @@ else
   echo "[primer] /opt/tribes/render-primer.sh MISSING — primer NOT refreshed (harness install incomplete / wrong ref?)" >&2
 fi
 
+# Prefer the LIVE theme the in-VM bridge writes to /run/tribes-theme on every
+# browser attach and every theme frame, so a mid-session light/dark toggle takes
+# effect on the next hermes launch; fall back to the create-time TRIBES_THEME when
+# that file is absent. Same order grok/launch.sh uses, and the reason it matters
+# is that TRIBES_THEME is fixed when the box is CREATED: reading it alone pinned
+# hermes' skin to whatever the browser was showing at create time forever. It is
+# also 'auto' now whenever the user chose to follow the system, which is not a
+# colour — the [ = light ] test below correctly resolves that to dark, and
+# /run/tribes-theme supplies the real answer on every launch a browser has touched.
 if [ -f "$HOME/.hermes/config.yaml" ]; then
-  skin=$([ "$TRIBES_THEME" = light ] && echo daylight || echo default)
+  theme="$(cat /run/tribes-theme 2>/dev/null)"
+  [ "$theme" = light ] || [ "$theme" = dark ] || theme=$([ "$TRIBES_THEME" = light ] && echo light || echo dark)
+  skin=$([ "$theme" = light ] && echo daylight || echo default)
   sed -i "s|^  skin:.*|  skin: $skin|" "$HOME/.hermes/config.yaml"
 fi
 
@@ -87,7 +127,19 @@ if [ -z "${TRIBES_HARNESS_REF:-}" ] && [ -f /opt/harnesses/skills/install-skills
   sh /opt/harnesses/skills/install-skills.sh || true
 else
   SKILLS_RAW_BASE="$(echo "${TRIBES_HARNESS_REPO:-https://github.com/tribes-protocol/ai-harness-setup}" | sed 's#//github\.com#//raw.githubusercontent.com#')"
-  curl -fsSL --max-time 10 "$SKILLS_RAW_BASE/${TRIBES_HARNESS_REF:-main}/install-skills.sh" | sh || true
+  # NEVER `| sh`, and NEVER a mutable ref (#2948 / #2937). Same contract as
+  # bootstrap.sh: resolve guest pin -> host pin -> the last reviewed release (never
+  # `main`, which routes around the release pin), download to a file, require the
+  # complete file, then run it. A truncated transfer can no longer half-execute.
+  SKILLS_REF="${TRIBES_HARNESS_REF:-${HOST_HARNESS_REF:-68adbaccc020d97b8b62a6f400c8283b22ecae07}}"
+  sk="$(mktemp 2>/dev/null || echo /tmp/install-skills.$$)"
+  if curl -fsSL --max-time 10 "$SKILLS_RAW_BASE/$SKILLS_REF/install-skills.sh" -o "$sk" 2>/dev/null &&
+     [ -s "$sk" ] && [ "$(tail -n 1 "$sk")" = "exit 0" ]; then
+    sh "$sk" || true
+  else
+    echo "[skills] installer fetch failed or INCOMPLETE at ref '$SKILLS_REF' — skills NOT installed" >&2
+  fi
+  rm -f "$sk"
 fi
 
 # --- close the direct-provider escape hatch (#2255) --------------------------
@@ -99,9 +151,16 @@ fi
 # openrouter.ai instead of using the metered proxy. Dropping it before exec leaves
 # the metered proxy as the only route the harness can see.
 #
-# We do NOT set HTTP_PROXY/HTTPS_PROXY: the forwarder catalog is a CONNECT
-# allowlist that 403s every non-catalog authority, so a blanket proxy would break
-# github/npm/apt/pypi on every box.
+# We DO set HTTP_PROXY/HTTPS_PROXY, just before the exec below. This once said the
+# opposite, and it was true when written: the forwarder's CONNECT handling was an
+# exact catalog allowlist that 403'd every non-catalog authority, so a blanket proxy
+# really would have broken github/npm/apt/pypi. terminal#2883 replaced that with
+# default-allow passthrough over a resolved-address deny floor (#2887 added plain-HTTP
+# absolute-URI, #2891 brought bracketed IPv6 literals to the same floor), so a
+# non-catalog host now tunnels straight through unmetered. Catalog hosts stay metered
+# on :443. The claim outlived the behaviour it described and sat directly above the
+# code contradicting it (terminal#2875); test/proxy-env-contract.test.sh now fails CI
+# if it comes back.
 #
 # The unset is deliberately guard-scoped, NOT value-scoped (i.e. not "unset only
 # if it looks like the placeholder"). Value-matching would couple this script to a
