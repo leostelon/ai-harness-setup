@@ -3,9 +3,9 @@
     "ANTHROPIC_BASE_URL": "__TRIBES_PROXY__",
     "ANTHROPIC_AUTH_TOKEN": "__TRIBES_TOKEN__",
     "ANTHROPIC_MODEL": "__TRIBES_MODEL__",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku"
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic/claude-opus-4.8",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic/claude-sonnet-4.6",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic/claude-haiku-4.5"
   },
   "theme": "auto",
   "skipDangerousModePermissionPrompt": true,
