@@ -154,7 +154,7 @@ model") and it does **not** mean it skips model metering.
 
 - `zipbox-x.com` (`zipbox-x.com/SKILL.md`) — a worked example of this contract:
   it sends the catalog placeholder in the `Authorization` header slot and is
-  billed per request, with the per-endpoint rates written out.
+  billed per resource returned, with the per-endpoint rates written out.
 
 ## Related hardening
 
