@@ -18,7 +18,7 @@ command -v pi >/dev/null 2>&1 ||
 # --- seed the shared agent primer -------------------------------------------
 # Seed the shared agent primer from the repo root (single source of truth).
 RAW_BASE="$(echo "${TRIBES_HARNESS_REPO:-https://github.com/tribes-protocol/ai-harness-setup}" | sed 's#//github\.com#//raw.githubusercontent.com#')"
-REF="${TRIBES_HARNESS_REF:-${HOST_HARNESS_REF:-main}}"
+REF="${TRIBES_HARNESS_REF:-${HOST_HARNESS_REF:-68adbaccc020d97b8b62a6f400c8283b22ecae07}}"
 # Cache the PLACEHOLDER-BEARING primer + the renderer outside the workspace, then
 # render. Bootstrap runs ONCE and its sed consumes the placeholders, so stamping
 # them here alone froze the wrong values for the life of the disk: the guest's
@@ -134,5 +134,18 @@ done
 if [ -z "${TRIBES_HARNESS_REF:-}" ] && [ -f /opt/harnesses/skills/install-skills.sh ]; then
   sh /opt/harnesses/skills/install-skills.sh || true
 else
-  curl -fsSL --max-time 20 "$RAW_BASE/${TRIBES_HARNESS_REF:-main}/install-skills.sh" | sh || true
+  # NEVER `| sh`, and NEVER a mutable ref (#2948 / #2937). `curl | sh` executes a
+  # TRUNCATED transfer as root — the shell runs whatever bytes arrived. Download to
+  # a file at the ref $REF already resolved above (guest pin -> host pin -> the last
+  # reviewed release), require the complete file (install-skills.sh ends with a
+  # literal `exit 0`; test/runtime-supply-chain-pins.test.sh locks that contract),
+  # and only then run it.
+  sk="$(mktemp 2>/dev/null || echo /tmp/install-skills.$$)"
+  if curl -fsSL --max-time 20 "$RAW_BASE/$REF/install-skills.sh" -o "$sk" 2>/dev/null &&
+     [ -s "$sk" ] && [ "$(tail -n 1 "$sk")" = "exit 0" ]; then
+    sh "$sk" || true
+  else
+    echo "[skills] installer fetch failed or INCOMPLETE at ref '$REF' — skills NOT installed" >&2
+  fi
+  rm -f "$sk"
 fi

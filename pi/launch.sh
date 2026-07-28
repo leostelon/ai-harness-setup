@@ -75,7 +75,19 @@ if [ -z "${TRIBES_HARNESS_REF:-}" ] && [ -f /opt/harnesses/skills/install-skills
   sh /opt/harnesses/skills/install-skills.sh || true
 else
   SKILLS_RAW_BASE="$(echo "${TRIBES_HARNESS_REPO:-https://github.com/tribes-protocol/ai-harness-setup}" | sed 's#//github\.com#//raw.githubusercontent.com#')"
-  curl -fsSL --max-time 10 "$SKILLS_RAW_BASE/${TRIBES_HARNESS_REF:-main}/install-skills.sh" | sh || true
+  # NEVER `| sh`, and NEVER a mutable ref (#2948 / #2937). Same contract as
+  # bootstrap.sh: resolve guest pin -> host pin -> the last reviewed release (never
+  # `main`, which routes around the release pin), download to a file, require the
+  # complete file, then run it. A truncated transfer can no longer half-execute.
+  SKILLS_REF="${TRIBES_HARNESS_REF:-${HOST_HARNESS_REF:-68adbaccc020d97b8b62a6f400c8283b22ecae07}}"
+  sk="$(mktemp 2>/dev/null || echo /tmp/install-skills.$$)"
+  if curl -fsSL --max-time 10 "$SKILLS_RAW_BASE/$SKILLS_REF/install-skills.sh" -o "$sk" 2>/dev/null &&
+     [ -s "$sk" ] && [ "$(tail -n 1 "$sk")" = "exit 0" ]; then
+    sh "$sk" || true
+  else
+    echo "[skills] installer fetch failed or INCOMPLETE at ref '$SKILLS_REF' — skills NOT installed" >&2
+  fi
+  rm -f "$sk"
 fi
 
 # --- close the direct-provider escape hatch (#2255) --------------------------

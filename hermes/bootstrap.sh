@@ -37,18 +37,55 @@ set -e
 # other harnesses install one quiet npm/binary, so their replay is tiny; keep
 # hermes's bootstrap equally quiet. `|| true` so a non-zero installer exit can't
 # abort bootstrap (which would drop the once-only marker and re-run everything).
+# RUNTIME half of #2947 (tracked as #2948). This block used to pipe
+# `curl https://hermes-agent.nousresearch.com/install.sh` straight into a ROOT
+# bash inside a live tenant VM, with no integrity check at all. It is NOT dead
+# code: it is gated on `command -v hermes` missing, which is exactly the state an
+# EMPTY harness delta produces.
+#
+# UNLIKE grok and cursor above, hermes has NO version-addressed artifact to pin,
+# and this is stated rather than dressed up. Its install.sh git-clones
+# NousResearch/hermes-agent at whatever the default branch points to, builds a
+# venv from PyPI, and pulls uv from astral.sh and node from nodejs.org. So the
+# ACHIEVABLE pin is the INSTALLER SCRIPT ONLY: verifying HERMES_INSTALLER_SHA256
+# proves the script that runs as root here is the script a human reviewed. It
+# does NOT bind the tree that script then installs. Binding that too needs
+# `--commit <sha>` (the installer supports it) plus a lockfile for uv/PyPI/node —
+# a hermes-versioning change, not a supply-chain one. Same limit, same wording,
+# as dockers/Dockerfile.harnesses in tribes-protocol/terminal; keep the digest in
+# step with it.
+#
+# The digest check is placed BEFORE execution and is FAIL CLOSED: a fetch failure,
+# a missing sha256sum, or wrong BYTES all skip the install. A truncated download is
+# indistinguishable from tampering here and also skips; that is the correct side to
+# err on. Note this is a STRICTER polarity than the bake, which tolerates a vendor
+# outage so one flaky fetch cannot fail every build — here the cost of skipping is
+# one degraded VM, not a fleet-wide build stall, so there is no reason to be lax.
+#
+# To bump: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | sha256sum
+HERMES_INSTALLER_SHA256=e1091d11094768aaddc71ab6807ee41dc128637ed61cda3a7f3df15432c41248
 if ! command -v hermes >/dev/null 2>&1; then
-  # Run the installer under `script` so it sees a PTY (isatty), then discard
-  # script's OWN stdout to /var/log + /dev/null. Why both: (1) a plain
-  # `... >/log 2>&1` makes the installer's stdout a NON-tty, and the Nous
-  # install.sh then builds a degraded TUI (the agent comes up missing its full
-  # UI), which breaks the resize check. (2) Letting it write to the terminal fills
-  # the bridge scrollback with the install log, which the exit->bash reconnect
-  # replays and buries the exitToShell probe. `script` gives it a real tty (full
-  # TUI build) while keeping every byte off the dispatcher terminal.
-  script -qec \
-    'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-setup --skip-browser' \
-    /var/log/hermes-install.log >/dev/null 2>&1 || true
+  # Fetch to a FILE and verify, then run the verified file. Run it under `script`
+  # so it sees a PTY (isatty), then discard script's OWN stdout to /var/log +
+  # /dev/null. Why both: (1) a plain `... >/log 2>&1` makes the installer's stdout
+  # a NON-tty, and the Nous install.sh then builds a degraded TUI (the agent comes
+  # up missing its full UI), which breaks the resize check. (2) Letting it write to
+  # the terminal fills the bridge scrollback with the install log, which the
+  # exit->bash reconnect replays and buries the exitToShell probe. `script` gives
+  # it a real tty (full TUI build) while keeping every byte off the dispatcher
+  # terminal.
+  hi=/tmp/hermes-install.$$.sh
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    echo "[hermes] sha256sum unavailable — refusing to run an unverified vendor installer" >&2
+  elif curl -fsSL --retry 3 --max-time 300 -o "$hi" \
+         https://hermes-agent.nousresearch.com/install.sh 2>/dev/null &&
+       echo "${HERMES_INSTALLER_SHA256}  $hi" | sha256sum -c - >/dev/null 2>&1; then
+    script -qec "bash $hi --skip-setup --skip-browser" \
+      /var/log/hermes-install.log >/dev/null 2>&1 || true
+  else
+    echo "[hermes] installer fetch failed or DIGEST MISMATCH — hermes NOT installed" >&2
+  fi
+  rm -f "$hi"
 
   # --- post-install prune ----------------------------------------------------
   # hermes installs HERE, on first boot, onto the VM's own disk (it is no longer
@@ -71,7 +108,7 @@ fi
 # --- seed the shared agent primer -------------------------------------------
 # Seed the shared agent primer from the repo root (single source of truth).
 RAW_BASE="$(echo "${TRIBES_HARNESS_REPO:-https://github.com/tribes-protocol/ai-harness-setup}" | sed 's#//github\.com#//raw.githubusercontent.com#')"
-REF="${TRIBES_HARNESS_REF:-${HOST_HARNESS_REF:-main}}"
+REF="${TRIBES_HARNESS_REF:-${HOST_HARNESS_REF:-68adbaccc020d97b8b62a6f400c8283b22ecae07}}"
 # Cache the PLACEHOLDER-BEARING primer + the renderer outside the workspace, then
 # render. Bootstrap runs ONCE and its sed consumes the placeholders, so stamping
 # them here alone froze the wrong values for the life of the disk: the guest's
@@ -161,5 +198,18 @@ done
 if [ -z "${TRIBES_HARNESS_REF:-}" ] && [ -f /opt/harnesses/skills/install-skills.sh ]; then
   sh /opt/harnesses/skills/install-skills.sh || true
 else
-  curl -fsSL --max-time 20 "$RAW_BASE/${TRIBES_HARNESS_REF:-main}/install-skills.sh" | sh || true
+  # NEVER `| sh`, and NEVER a mutable ref (#2948 / #2937). `curl | sh` executes a
+  # TRUNCATED transfer as root — the shell runs whatever bytes arrived. Download to
+  # a file at the ref $REF already resolved above (guest pin -> host pin -> the last
+  # reviewed release), require the complete file (install-skills.sh ends with a
+  # literal `exit 0`; test/runtime-supply-chain-pins.test.sh locks that contract),
+  # and only then run it.
+  sk="$(mktemp 2>/dev/null || echo /tmp/install-skills.$$)"
+  if curl -fsSL --max-time 20 "$RAW_BASE/$REF/install-skills.sh" -o "$sk" 2>/dev/null &&
+     [ -s "$sk" ] && [ "$(tail -n 1 "$sk")" = "exit 0" ]; then
+    sh "$sk" || true
+  else
+    echo "[skills] installer fetch failed or INCOMPLETE at ref '$REF' — skills NOT installed" >&2
+  fi
+  rm -f "$sk"
 fi

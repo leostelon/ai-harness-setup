@@ -12,9 +12,46 @@
 set -e
 
 # --- install the harness binary ---------------------------------------------
+# RUNTIME half of #2947 (tracked as #2948). This block used to be
+# `curl https://x.ai/cli/install.sh | GROK_BIN_DIR=/usr/local/bin bash`: an
+# unauthenticated, unpinned vendor script piped into a ROOT shell inside a live
+# tenant VM, with no integrity check of any kind.
+#
+# It is NOT dead code. It is gated on `command -v grok` missing, and that is
+# exactly the state an EMPTY harness delta produces — so on any box whose delta
+# shipped empty this fired on the first switch to grok. dockers/Dockerfile.harnesses
+# in the terminal repo closed the identical hole on the BAKE surface; this closes
+# it on the guest.
+#
+# Same treatment as the bake: fetch the VERSION-ADDRESSED artifact (the vendor's
+# own documented download — `install.sh <version>` fetches this exact URL) and
+# verify it against a pinned digest BEFORE it becomes executable.
+#
+# FAIL CLOSED. A fetch failure, a missing sha256sum, or a digest MISMATCH all skip
+# the install and say so on stderr. The box is then a grok harness with no grok —
+# which is precisely the state it was already in when this branch was reached, so
+# nothing is lost, and unverified vendor bytes never run as root. Never add a
+# fallback to the unpinned installer here; that would restore the whole defect.
+#
+# Keep GROK_VERSION/GROK_SHA256 in step with dockers/Dockerfile.harnesses in
+# tribes-protocol/terminal, which pins the same artifact for the drive bake.
+# To bump: pick a version from https://x.ai/cli/stable, then
+#   curl -fsSL https://x.ai/cli/grok-<version>-linux-x86_64 | sha256sum
+GROK_VERSION=0.2.112
+GROK_SHA256=c2867112f7d89366123fe68a55a23dfb027d3602fc5b5b9cd5c080dacb4a2503
 if ! command -v grok >/dev/null 2>&1; then
-  echo "Installing grok (first boot of this sandbox)..."
-  curl -fsSL https://x.ai/cli/install.sh | GROK_BIN_DIR=/usr/local/bin bash || true
+  echo "Installing grok $GROK_VERSION (first boot of this sandbox)..."
+  gt=/tmp/grok.$$
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    echo "[grok] sha256sum unavailable — refusing to install unverified vendor bytes" >&2
+  elif curl -fsSL --retry 3 --max-time 300 -o "$gt" \
+         "https://x.ai/cli/grok-${GROK_VERSION}-linux-x86_64" 2>/dev/null &&
+       echo "${GROK_SHA256}  $gt" | sha256sum -c - >/dev/null 2>&1; then
+    install -m 0755 "$gt" /usr/local/bin/grok || true
+  else
+    echo "[grok] pinned artifact $GROK_VERSION unavailable or DIGEST MISMATCH — grok NOT installed" >&2
+  fi
+  rm -f "$gt"
 fi
 
 # --- fill the theme placeholder (FILE config) -------------------------------
@@ -29,7 +66,7 @@ fi
 # --- seed the shared agent primer -------------------------------------------
 # Seed the shared agent primer from the repo root (single source of truth).
 RAW_BASE="$(echo "${TRIBES_HARNESS_REPO:-https://github.com/tribes-protocol/ai-harness-setup}" | sed 's#//github\.com#//raw.githubusercontent.com#')"
-REF="${TRIBES_HARNESS_REF:-${HOST_HARNESS_REF:-main}}"
+REF="${TRIBES_HARNESS_REF:-${HOST_HARNESS_REF:-68adbaccc020d97b8b62a6f400c8283b22ecae07}}"
 # Cache the PLACEHOLDER-BEARING primer + the renderer outside the workspace, then
 # render. Bootstrap runs ONCE and its sed consumes the placeholders, so stamping
 # them here alone froze the wrong values for the life of the disk: the guest's
@@ -93,5 +130,18 @@ done
 if [ -z "${TRIBES_HARNESS_REF:-}" ] && [ -f /opt/harnesses/skills/install-skills.sh ]; then
   sh /opt/harnesses/skills/install-skills.sh || true
 else
-  curl -fsSL --max-time 20 "$RAW_BASE/${TRIBES_HARNESS_REF:-main}/install-skills.sh" | sh || true
+  # NEVER `| sh`, and NEVER a mutable ref (#2948 / #2937). `curl | sh` executes a
+  # TRUNCATED transfer as root — the shell runs whatever bytes arrived. Download to
+  # a file at the ref $REF already resolved above (guest pin -> host pin -> the last
+  # reviewed release), require the complete file (install-skills.sh ends with a
+  # literal `exit 0`; test/runtime-supply-chain-pins.test.sh locks that contract),
+  # and only then run it.
+  sk="$(mktemp 2>/dev/null || echo /tmp/install-skills.$$)"
+  if curl -fsSL --max-time 20 "$RAW_BASE/$REF/install-skills.sh" -o "$sk" 2>/dev/null &&
+     [ -s "$sk" ] && [ "$(tail -n 1 "$sk")" = "exit 0" ]; then
+    sh "$sk" || true
+  else
+    echo "[skills] installer fetch failed or INCOMPLETE at ref '$REF' — skills NOT installed" >&2
+  fi
+  rm -f "$sk"
 fi

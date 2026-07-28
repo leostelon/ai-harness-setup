@@ -14,31 +14,67 @@
 set -e
 
 # --- install the harness binary ---------------------------------------------
-# The official installer unpacks a self-contained build under
-# $HOME/.local/share/cursor-agent and symlinks `agent` into $HOME/.local/bin —
-# no root or Node needed. Pin HOME=/root/workspace for the INSTALL regardless of
-# what HOME the dispatcher runs this script with, so the binary always lands on
-# the persistent workspace disk (.local/ is never relocated by the dispatcher —
-# only the dot-config dirs are). /root/workspace/.local/bin is not on the
-# dispatcher's PATH, so also expose the entry symlink at /usr/local/bin, which
-# always is.
+# RUNTIME half of #2947 (tracked as #2948). This block used to be
+# `curl https://cursor.com/install | HOME=/root/workspace bash`: an
+# unauthenticated, unpinned vendor script piped into a ROOT shell inside a live
+# tenant VM, with no integrity check of any kind.
+#
+# It is NOT dead code. It is gated on `command -v cursor` missing, and that is
+# exactly the state an EMPTY harness delta produces — so on any box whose delta
+# shipped empty this fired on the first switch to cursor.
+#
+# Same treatment as the bake: cursor.com/install is ALSO the version pointer (it
+# hard-codes the release it downloads), so its bytes change on every Cursor
+# release and digest-pinning the SCRIPT would break on a routine vendor push.
+# The ARTIFACT is pinned instead — the installer downloads exactly this URL.
+#
+# The extracted tree is relocatable: dist-package/cursor-agent is a bash shim that
+# resolves `realpath "$0"` and execs its OWN sibling node + index.js, so it works
+# through the symlink below. Land it on the persistent workspace disk (.local/ is
+# never relocated by the dispatcher) and expose the entry at /usr/local/bin, which
+# is on the dispatcher's PATH.
+#
 # Exposed as `cursor`, NOT `agent`. Every harness delta overlays into the SAME
 # /opt/harnesses tree, so a generic name collides with any other harness that
-# ships one — grok's installer drops an `agent` too, and the bake's disjointness
-# gate rejects the conflict (`./bin/agent <- cursor grok`). Each harness's
-# entrypoint is named after the harness. Keep this in step with
-# dockers/Dockerfile.harnesses in the terminal repo, which bakes bin/cursor.
-command -v cursor >/dev/null 2>&1 ||
-  curl -fsS https://cursor.com/install | HOME=/root/workspace bash || true
-[ -x /root/workspace/.local/bin/agent ] &&
-  ln -sf /root/workspace/.local/bin/agent /usr/local/bin/cursor || true
+# ships one — the vendor installer drops an `agent`, and the bake's disjointness
+# gate rejected exactly that conflict (`./bin/agent <- cursor grok`). Fetching the
+# artifact ourselves means the generic name is never created in the first place.
+#
+# FAIL CLOSED. A fetch failure, a missing sha256sum, or a digest MISMATCH all skip
+# the install and say so on stderr — the box is then a cursor harness with no
+# cursor, which is the state it was already in when this branch was reached.
+# Never add a fallback to the unpinned installer here.
+#
+# Keep CURSOR_VERSION/CURSOR_SHA256 in step with dockers/Dockerfile.harnesses in
+# tribes-protocol/terminal, which pins the same artifact for the drive bake.
+# To bump: read the pinned release out of the vendor script, then hash the asset:
+#   curl -fsS https://cursor.com/install | grep -o 'lab/[^/]*/' | head -1
+#   curl -fsSL https://downloads.cursor.com/lab/<ver>/linux/x64/agent-cli-package.tar.gz | sha256sum
+CURSOR_VERSION=2026.07.23-e383d2b
+CURSOR_SHA256=702ad595213bee5df0268be9f80a19f29fcceaa2a42fc55e39f2b5199051f0c4
+if ! command -v cursor >/dev/null 2>&1; then
+  ct=/tmp/cursor-agent.$$.tar.gz
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    echo "[cursor] sha256sum unavailable — refusing to install unverified vendor bytes" >&2
+  elif curl -fsSL --retry 3 --max-time 300 -o "$ct" \
+         "https://downloads.cursor.com/lab/${CURSOR_VERSION}/linux/x64/agent-cli-package.tar.gz" 2>/dev/null &&
+       echo "${CURSOR_SHA256}  $ct" | sha256sum -c - >/dev/null 2>&1; then
+    mkdir -p /root/workspace/.local/cursor
+    tar --strip-components=1 -xzf "$ct" -C /root/workspace/.local/cursor || true
+    [ -x /root/workspace/.local/cursor/cursor-agent ] &&
+      ln -sf /root/workspace/.local/cursor/cursor-agent /usr/local/bin/cursor || true
+  else
+    echo "[cursor] pinned artifact $CURSOR_VERSION unavailable or DIGEST MISMATCH — cursor NOT installed" >&2
+  fi
+  rm -f "$ct"
+fi
 
 # --- seed the shared agent primer -------------------------------------------
 # Seed the shared agent primer from the repo root (single source of truth).
 # cursor reads AGENTS.md natively (it also reads CLAUDE.md — same content, so
 # one file is enough; do not duplicate).
 RAW_BASE="$(echo "${TRIBES_HARNESS_REPO:-https://github.com/tribes-protocol/ai-harness-setup}" | sed 's#//github\.com#//raw.githubusercontent.com#')"
-REF="${TRIBES_HARNESS_REF:-${HOST_HARNESS_REF:-main}}"
+REF="${TRIBES_HARNESS_REF:-${HOST_HARNESS_REF:-68adbaccc020d97b8b62a6f400c8283b22ecae07}}"
 # Cache the PLACEHOLDER-BEARING primer + the renderer outside the workspace, then
 # render. Bootstrap runs ONCE and its sed consumes the placeholders, so stamping
 # them here alone froze the wrong values for the life of the disk: the guest's
@@ -89,5 +125,18 @@ fi
 if [ -z "${TRIBES_HARNESS_REF:-}" ] && [ -f /opt/harnesses/skills/install-skills.sh ]; then
   sh /opt/harnesses/skills/install-skills.sh || true
 else
-  curl -fsSL --max-time 20 "$RAW_BASE/${TRIBES_HARNESS_REF:-main}/install-skills.sh" | sh || true
+  # NEVER `| sh`, and NEVER a mutable ref (#2948 / #2937). `curl | sh` executes a
+  # TRUNCATED transfer as root — the shell runs whatever bytes arrived. Download to
+  # a file at the ref $REF already resolved above (guest pin -> host pin -> the last
+  # reviewed release), require the complete file (install-skills.sh ends with a
+  # literal `exit 0`; test/runtime-supply-chain-pins.test.sh locks that contract),
+  # and only then run it.
+  sk="$(mktemp 2>/dev/null || echo /tmp/install-skills.$$)"
+  if curl -fsSL --max-time 20 "$RAW_BASE/$REF/install-skills.sh" -o "$sk" 2>/dev/null &&
+     [ -s "$sk" ] && [ "$(tail -n 1 "$sk")" = "exit 0" ]; then
+    sh "$sk" || true
+  else
+    echo "[skills] installer fetch failed or INCOMPLETE at ref '$REF' — skills NOT installed" >&2
+  fi
+  rm -f "$sk"
 fi

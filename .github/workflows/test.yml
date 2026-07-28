@@ -29,6 +29,8 @@ jobs:
         run: sh test/cline-notice-suppression.test.sh
       - name: skills authoring contract (mirrors the downstream consumer)
         run: sh test/skills-contract.test.sh
+      - name: runtime supply-chain pins (no curl|shell, no mutable ref, digests gate execution)
+        run: sh test/runtime-supply-chain-pins.test.sh
       - name: shared skills installation contract
         run: sudo -E sh test/shared-skills-install.test.sh
       - name: drive-first skills installation contract
