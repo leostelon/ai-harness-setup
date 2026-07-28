@@ -107,4 +107,35 @@ if [ -n "${ZIPBOX_EGRESS_PROXY_URL:-}" ]; then
   export HTTP_PROXY="$ZIPBOX_EGRESS_PROXY_URL"
 fi
 
+# --- suppress the ClinePass upsell, which EATS THE USER'S FIRST ENTER (#2924) ---
+# cline 3.0.46 paints a "Try ClinePass" subscription modal over the composer on
+# startup ("Press Enter to open, Esc to close"). It is modal over the KEYBOARD, not
+# just the screen: the user types their first prompt, presses Enter, and the Enter
+# is consumed by the modal — cline prints "Opened ClinePass in your browser" and the
+# prompt is never submitted. No turn, no error, no billed generation. The composer
+# still shows the text, so the box looks alive and simply never answers.
+#
+# Measured on proof-run-02 (gohan) through a REAL agent-shell launch, harness ref
+# 559ef061, three runs differing in one variable each:
+#   no env var, no Esc  -> modal shown, Enter eaten, NO billing transaction
+#   no env var, Esc first -> modal dismissed, turn ran, -617 uUSD
+#   THIS env var, no Esc  -> modal absent (0 occurrences), turn ran, -617 uUSD
+#
+# CLINE_DISABLE_CLINE_PASS_NOTICE is cline's own supported switch (it ships beside
+# CLINE_FORCE_CLINE_PASS_NOTICE in the CLI binary), so this is the vendor's opt-out,
+# not a hack.
+#
+# Set in launch.sh, not bootstrap.sh, and as ENV rather than by pre-seeding cline's
+# ~/.cline/data/settings/cli-notices.json "shown" map: the file is written by cline
+# itself, is not part of any contract with us, and lives on the PERSISTENT disk, so
+# seeding it would be a one-shot that a fresh disk, a restore, or a new notice key
+# (the binary already carries a second one, `cline-cli-zen`) would walk straight
+# past. The env var is re-applied on EVERY launch, exactly like the token refresh
+# above, so it survives restore and cannot go stale.
+#
+# Unconditional, deliberately: the upsell is wrong for a BYO box too. A user who
+# brought their own key did not ask us for a subscription pitch either, and there
+# is nothing platform-funded about the keystroke it steals.
+export CLINE_DISABLE_CLINE_PASS_NOTICE=1
+
 exec cline -i --auto-approve true

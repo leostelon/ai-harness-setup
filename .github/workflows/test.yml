@@ -25,6 +25,8 @@ jobs:
         run: sh test/primer-render.test.sh
       - name: No launcher claims it skips HTTP_PROXY while exporting it
         run: sh test/proxy-env-contract.test.sh
+      - name: cline suppresses the ClinePass upsell that eats the first Enter
+        run: sh test/cline-notice-suppression.test.sh
       - name: skills authoring contract (mirrors the downstream consumer)
         run: sh test/skills-contract.test.sh
       - name: shared skills installation contract
